@@ -1,0 +1,119 @@
+name: christiangeorgelucas/asyncapi-tools
+version: 0.1.0
+language: typescript
+description: >-
+  Deterministic, offline parsing and structural inspection of AsyncAPI
+  documents (the event-driven-API spec for Kafka/MQTT/AMQP/WebSocket
+  APIs — the async/messaging counterpart to OpenAPI). Completes the
+  API-schema family alongside openapi-tools (REST), graphql-schema-tools
+  (GraphQL), and protobuf-tools (gRPC) — distinct from all three and from
+  dataformat-tools' generic YAML/JSON conversion. Supports BOTH AsyncAPI
+  2.x (channels carry publish/subscribe operations directly) and 3.x
+  (top-level operations reference channels by $ref) — every node branches
+  on the detected generation. Detects the spec version; parses a document
+  into a structural overview; validates well-formedness and reports
+  violations; extracts the info block; lists channels, operations, and
+  message definitions (payload/headers/contentType); extracts one
+  message's payload by name; lists servers and builds a protocol/
+  transport inventory; indexes the components section (messages, schemas,
+  securitySchemes, parameters, and 3.x's reusable channels/operations/
+  servers); lists security schemes with type-specific fields; resolves a
+  message payload's $ref to its target schema (internal only — external
+  refs are flagged, never fetched); extracts server/operation/message
+  protocol-specific bindings as structured facts; produces summary counts;
+  and inventories every $ref used (report only). Wraps js-yaml (MIT) in
+  SAFE mode (CORE_SCHEMA, no code-executing tags) with explicit
+  maxDepth/maxAliases and a 3 MB ceiling enforced before the parser ever
+  sees the input; all AsyncAPI schema knowledge is this package's own
+  code (the heavy @asyncapi/parser dependency was deliberately avoided
+  due to its large transitive footprint). The document is always
+  caller-supplied text — no network, no remote $ref resolution, no
+  wall-clock, no randomness. Malformed or oversized input returns a
+  structured error, never a crash.
+author: Christian George Lucas
+license: MIT
+tags:
+    - asyncapi
+    - event-driven
+    - kafka
+    - mqtt
+    - amqp
+    - websocket
+    - messaging
+    - api-schema
+    - yaml
+    - js-yaml
+    - static-analysis
+nodes:
+    - name: DetectVersion
+      description: 'Detects which AsyncAPI spec generation a document declares by reading its top-level asyncapi: field — 2 for any "2.x.x" document, 3 for any "3.x.x" document, or 0 if the field is missing, empty, or unrecognized. Every other node branches its extraction logic on this result, since 2.x and 3.x have materially different document shapes.'
+      input: AsyncApiDocument
+      output: DetectVersionOutput
+    - name: ParseDocument
+      description: 'Parses an AsyncAPI document (2.x or 3.x, YAML or JSON text) into a brief top-level structural overview: detected spec generation, the info block''s title/version, and counts of servers/channels/(3.x-only) top-level operations. For full detail on any one section use the dedicated List/Extract nodes; for a document-wide operation count including 2.x, use SummarizeDocument.'
+      input: AsyncApiDocument
+      output: ParseDocumentOutput
+    - name: ValidateDocument
+      description: 'Validates that a document is structurally well-formed AsyncAPI: a recognized asyncapi: version, present info.title/info.version, a well-shaped channels: map, and (3.x only) a well-shaped top-level operations: map with a valid action and a channel $ref on every entry. Structural validation of the shapes this package depends on to extract data correctly — not full JSON-Schema validation against the official AsyncAPI meta-schema. Never throws; reports violations as a path+message list.'
+      input: AsyncApiDocument
+      output: ValidateDocumentOutput
+    - name: ExtractInfo
+      description: 'Extracts the document''s info block — title, version, description, terms of service, contact (name/url/email), license (name/url), tags, and external-docs URL. Identical shape between AsyncAPI 2.x and 3.x.'
+      input: AsyncApiDocument
+      output: ExtractInfoOutput
+    - name: ListChannels
+      description: 'Lists every channel, unified across spec generations: for 2.x, each channel''s key plus whether it declares publish:/subscribe: and that operation''s resolved message name(s); for 3.x, each channel''s key, its address: (defaulting to the key when omitted), and the resolved message name(s) under its messages: map. Also reports each channel''s description and declared parameters: names.'
+      input: AsyncApiDocument
+      output: ListChannelsOutput
+    - name: ListOperations
+      description: 'Lists every operation, unified across spec generations: for 2.x, every channel''s publish:/subscribe: block flattened into one operation each (action = the field name); for 3.x, every entry in the top-level operations: map (action = the declared send/receive, channel resolved from the operation''s channel: $ref). Each entry carries its operationId/key, summary, description, and resolved message name(s).'
+      input: AsyncApiDocument
+      output: ListOperationsOutput
+    - name: ListMessages
+      description: 'Lists every message DEFINITION found in the document: every named entry under components.messages, plus any inline (non-$ref) message object found directly under a channel''s publish/subscribe/messages that isn''t already covered by components. Each entry reports its resolved name, title, summary, description, contentType, whether it declares a payload/headers schema, and where it was found.'
+      input: AsyncApiDocument
+      output: ListMessagesOutput
+    - name: GetMessagePayload
+      description: 'Extracts one message''s payload (and headers) schema by name — looked up first in components.messages, then among inline message definitions under a channel. Returned as-is (JSON), with any internal $ref it contains left unresolved (use ExtractMessageSchemas to follow the payload''s top-level $ref). found=false when no message with that name exists.'
+      input: MessageRequest
+      output: GetMessagePayloadOutput
+    - name: ListServers
+      description: 'Lists every server under the document''s top-level servers: map: name, protocol, protocolVersion, description, and a url field normalized across spec generations (2.x''s url: verbatim, or 3.x''s host: + pathname: concatenated) — plus the raw 3.x host/pathname split for callers that need it.'
+      input: AsyncApiDocument
+      output: ListServersOutput
+    - name: ExtractProtocols
+      description: 'Extracts a transport-protocol inventory: every distinct protocol: value declared across the document''s servers, with how many servers declare it — a quick "what transports does this API span" check (kafka, mqtt, amqp, ws, http, ...). Sorted by protocol name for deterministic output.'
+      input: AsyncApiDocument
+      output: ExtractProtocolsOutput
+    - name: ExtractComponents
+      description: 'Lists the named entries under the document''s components: section — an index of what''s available for lookup by the other Get and List nodes, without resolving or expanding any of it: message, schema, security-scheme, and parameter names (both generations), plus (3.x only) reusable channel/operation/server names.'
+      input: AsyncApiDocument
+      output: ExtractComponentsOutput
+    - name: ListSecuritySchemes
+      description: 'Lists every security scheme declared under components.securitySchemes: name, type (userPassword/apiKey/X509/symmetricEncryption/asymmetricEncryption/httpApiKey/http/oauth2/openIdConnect/plain/scramSha256/scramSha512/gssapi), plus whichever type-specific fields apply (http''s scheme/bearerFormat, apiKey/httpApiKey''s location+name, oauth2''s flows as JSON, openIdConnect''s URL). Identical shape between 2.x and 3.x.'
+      input: AsyncApiDocument
+      output: ListSecuritySchemesOutput
+    - name: ExtractMessageSchemas
+      description: 'For every message definition in the document, extracts its payload''s schema reference: whether the payload is a $ref (vs. inline), the raw $ref target, whether that ref is external (never fetched, only flagged), and the schema actually resolved to — following one internal same-document $ref hop, or the inline payload itself.'
+      input: AsyncApiDocument
+      output: ExtractMessageSchemasOutput
+    - name: ExtractServerBindings
+      description: 'Extracts every server''s protocol-specific bindings: block as structured facts: one row per (server, protocol) pair, with that protocol''s binding object reported as opaque JSON (binding shapes are protocol-defined — kafka bindings look nothing like mqtt bindings — so the body is not modeled field-by-field). Identical shape between 2.x and 3.x.'
+      input: AsyncApiDocument
+      output: ExtractServerBindingsOutput
+    - name: ExtractOperationBindings
+      description: 'Extracts every operation''s protocol-specific bindings: block as structured facts. Version-aware: for 2.x, bindings live on each channel''s publish:/subscribe: block (scope_name = operationId, or "<channel>.<action>" when undeclared); for 3.x, bindings live directly on each top-level operation (scope_name = the operation key).'
+      input: AsyncApiDocument
+      output: ExtractOperationBindingsOutput
+    - name: ExtractMessageBindings
+      description: 'Extracts every message''s protocol-specific bindings: block as structured facts, scanned across components.messages — the canonical, addressable collection every message ultimately resolves through.'
+      input: AsyncApiDocument
+      output: ExtractMessageBindingsOutput
+    - name: SummarizeDocument
+      description: 'Whole-document counts — the cheapest possible "what''s in here" check: server, channel, operation, message, schema, and security-scheme counts. operation_count is version-normalized: the sum of every channel''s publish/subscribe operations for 2.x, or the size of the top-level operations: map for 3.x.'
+      input: AsyncApiDocument
+      output: SummarizeDocumentOutput
+    - name: ExtractRefs
+      description: 'Extracts every $ref string found anywhere in the document, in first-seen order, deduplicated — plus the subset that are external (do not start with "#/": a remote URL or filesystem path). A report only: no $ref, internal or external, is ever fetched or resolved here.'
+      input: AsyncApiDocument
+      output: ExtractRefsOutput

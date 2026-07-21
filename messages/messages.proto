@@ -1,0 +1,416 @@
+// This file defines the data contracts (messages) for your Axiom package.
+// Every node's --input and --output refers to a message defined here.
+//
+// Run `axiom create message <Name>` to scaffold a new message below.
+// Run `axiom generate` to compile these definitions into language bindings in gen/.
+//
+// DOCUMENTATION
+//   Comments written directly above a message or field declaration are extracted
+//   automatically at publish time and shown in the Axiom registry as documentation.
+//   Write your descriptions there — no separate doc files needed.
+//
+//   Leading comment  (no blank line before the declaration) → registry description ✓
+//   Detached comment (blank line before the declaration)    → ignored by registry  ✗
+//
+// This file is yours to edit. Axiom only appends new message blocks — it never
+// overwrites or removes content you have written.
+
+syntax = "proto3";
+
+package christiangeorgelucas.asyncapi_tools;
+
+// The raw AsyncAPI document supplied by the caller, as text (JSON or YAML —
+// auto-detected, since JSON is a syntactic subset of YAML). This is the
+// ONLY way a document enters any node: nodes never fetch a spec URL or
+// resolve an external/remote $ref themselves — everything is caller-
+// supplied text, parsed offline.
+message AsyncApiDocument {
+  string content = 1;
+}
+
+// Selects one named message from an AsyncAPI document (by its key under
+// components.messages, or by its declared `name`/`messageId` if defined
+// inline under a channel/operation and not present in components).
+message MessageRequest {
+  string content = 1;
+  string message_name = 2;
+}
+
+// One structural or semantic violation found while validating a document.
+message DocViolation {
+  // JSON-Pointer-style location of the violation (e.g. "/info/version").
+  string path = 1;
+  string message = 2;
+}
+
+// ---------------------------------------------------------------------------
+// DetectVersion
+// ---------------------------------------------------------------------------
+
+// Result of detecting which AsyncAPI spec generation a document declares.
+// AsyncAPI 2.x and 3.x have materially different document shapes (2.x:
+// channels carry publish/subscribe operations directly; 3.x: top-level
+// operations reference channels by $ref) — every other node in this
+// package branches on this.
+message DetectVersionOutput {
+  // 2 or 3, or 0 if the version could not be determined.
+  int32 major_version = 1;
+  // The literal `asyncapi:` version string declared in the document
+  // (e.g. "2.6.0", "3.0.0"), empty if absent or the document didn't parse.
+  string version_string = 2;
+  // Set when the input could not be parsed as JSON or YAML.
+  string parse_error = 3;
+}
+
+// ---------------------------------------------------------------------------
+// ParseDocument — top-level structural overview
+// ---------------------------------------------------------------------------
+
+// Result of parsing an AsyncAPI document into a brief top-level structural
+// overview: detected version, the info block's title, and counts of the
+// major sections. For full detail on any one section use the dedicated
+// List*/Extract* nodes instead.
+message ParseDocumentOutput {
+  int32 major_version = 1;
+  string version_string = 2;
+  string title = 3;
+  string api_version = 4;
+  int32 server_count = 5;
+  int32 channel_count = 6;
+  // 0 for a 2.x document (2.x has no top-level operations section — its
+  // operations live inside channels; see SummarizeDocument for a 2.x-
+  // inclusive operation count).
+  int32 top_level_operation_count = 7;
+  bool has_components = 8;
+  // Set on parse failure or if the document is not a mapping; every other
+  // field is then at its zero value.
+  string error = 9;
+}
+
+// ---------------------------------------------------------------------------
+// ValidateDocument
+// ---------------------------------------------------------------------------
+
+// Result of validating that a document is a well-formed AsyncAPI document:
+// required top-level fields present, a recognized `asyncapi:` version, and
+// version-appropriate shape for channels/operations/components. This is
+// structural validation, not full JSON-Schema validation against the
+// official AsyncAPI meta-schema.
+message ValidateDocumentOutput {
+  bool valid = 1;
+  repeated DocViolation violations = 2;
+  int32 major_version = 3;
+  string version_string = 4;
+  // Set when the input could not even be parsed; valid is always false and
+  // violations is always empty in that case (nothing to validate against).
+  string parse_error = 5;
+}
+
+// ---------------------------------------------------------------------------
+// ExtractInfo
+// ---------------------------------------------------------------------------
+
+// Result of extracting the document's `info` block.
+message ExtractInfoOutput {
+  bool found = 1;
+  string title = 2;
+  string api_version = 3;
+  string description = 4;
+  string terms_of_service = 5;
+  string contact_name = 6;
+  string contact_url = 7;
+  string contact_email = 8;
+  string license_name = 9;
+  string license_url = 10;
+  repeated string tags = 11;
+  string external_docs_url = 12;
+  string error = 13;
+}
+
+// ---------------------------------------------------------------------------
+// ListChannels
+// ---------------------------------------------------------------------------
+
+// One channel, in a shape unified across 2.x and 3.x.
+message ChannelSummary {
+  // The channel's key in the top-level `channels` map.
+  string name = 1;
+  // 3.x only: the channel's actual address/topic string (`address:`);
+  // defaults to `name` when 3.x omits it. Empty for a 2.x document, where
+  // `name` (the channel key) already IS the address.
+  string address = 2;
+  string description = 3;
+  // Message names on this channel: for 2.x, the resolved name(s) of
+  // publish.message / subscribe.message; for 3.x, the resolved name(s)
+  // under channels.<name>.messages.
+  repeated string message_names = 4;
+  // 2.x only: whether this channel declares a `publish:` / `subscribe:`
+  // operation. Always false for a 3.x document (3.x operations are
+  // top-level; see ListOperations).
+  bool has_publish = 5;
+  bool has_subscribe = 6;
+  // Parameter names declared under this channel's `parameters:` map
+  // (used for templated channel addresses like "user/{userId}/signedup").
+  repeated string parameter_names = 7;
+}
+
+message ListChannelsOutput {
+  repeated ChannelSummary channels = 1;
+  int32 major_version = 2;
+  string error = 3;
+}
+
+// ---------------------------------------------------------------------------
+// ListOperations
+// ---------------------------------------------------------------------------
+
+// One operation, in a shape unified across 2.x and 3.x.
+message OperationSummary {
+  // 2.x: the operation's `operationId` (empty if undeclared). 3.x: the
+  // operation's key in the top-level `operations` map.
+  string operation_id = 1;
+  // 2.x: "publish" or "subscribe" (the field name under the channel).
+  // 3.x: "send" or "receive" (the operation's `action:` field).
+  string action = 2;
+  // The channel this operation applies to (channel key, resolved from a
+  // 3.x $ref if needed).
+  string channel = 3;
+  string summary = 4;
+  string description = 5;
+  // Resolved message name(s) this operation sends/receives.
+  repeated string message_names = 6;
+}
+
+message ListOperationsOutput {
+  repeated OperationSummary operations = 1;
+  int32 major_version = 2;
+  string error = 3;
+}
+
+// ---------------------------------------------------------------------------
+// ListMessages / GetMessagePayload
+// ---------------------------------------------------------------------------
+
+// One message definition, wherever in the document it was found.
+message MessageSummary {
+  // The message's name: its key under components.messages, or its own
+  // declared `name`/`messageId` field when defined inline (not in
+  // components) under a channel/operation with no such field, the
+  // synthesized location path is used instead (e.g.
+  // "channels.userSignedup.messages.userSignedUpMessage").
+  string name = 1;
+  string title = 2;
+  string summary = 3;
+  string description = 4;
+  string content_type = 5;
+  bool has_payload = 6;
+  bool has_headers = 7;
+  // Where this message was found: "components.messages" or a channel/
+  // operation-relative path for an inline definition.
+  string source = 8;
+}
+
+message ListMessagesOutput {
+  repeated MessageSummary messages = 1;
+  string error = 2;
+}
+
+// Result of extracting one message's payload (and headers) schema by name.
+message GetMessagePayloadOutput {
+  bool found = 1;
+  // The message's payload schema, serialized as JSON, with any internal
+  // $ref it contained left as-is (not dereferenced).
+  string payload_json = 2;
+  // The message's headers schema, serialized as JSON; "{}" if none declared.
+  string headers_json = 3;
+  string content_type = 4;
+  string error = 5;
+}
+
+// ---------------------------------------------------------------------------
+// ListServers
+// ---------------------------------------------------------------------------
+
+// One server entry, in a shape unified across 2.x and 3.x.
+message ServerSummary {
+  // The server's key in the top-level `servers` map.
+  string name = 1;
+  // 2.x: the server's `url:` field, verbatim. 3.x: `host:` + `pathname:`
+  // concatenated (pathname appended only if non-empty), approximating the
+  // 2.x url shape for callers that don't care about the version split.
+  string url = 2;
+  // 3.x only: the raw `host:` field. Empty for a 2.x document.
+  string host = 3;
+  // 3.x only: the raw `pathname:` field. Empty for a 2.x document.
+  string pathname = 4;
+  string protocol = 5;
+  string protocol_version = 6;
+  string description = 7;
+}
+
+message ListServersOutput {
+  repeated ServerSummary servers = 1;
+  string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// ExtractProtocols
+// ---------------------------------------------------------------------------
+
+// One distinct transport protocol used across the document's servers, and
+// how many servers declare it.
+message ProtocolCount {
+  // e.g. "kafka", "mqtt", "amqp", "ws", "http".
+  string protocol = 1;
+  int32 server_count = 2;
+}
+
+message ExtractProtocolsOutput {
+  repeated ProtocolCount protocols = 1;
+  string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// ExtractComponents
+// ---------------------------------------------------------------------------
+
+// Result of listing the named entries under the document's `components`
+// section — an index of what's available for lookup by the other Get*/
+// List* nodes, without resolving/expanding any of it.
+message ExtractComponentsOutput {
+  repeated string message_names = 1;
+  repeated string schema_names = 2;
+  repeated string security_scheme_names = 3;
+  repeated string parameter_names = 4;
+  // 3.x only: components.channels / components.operations / components.servers.
+  repeated string channel_names = 5;
+  repeated string operation_names = 6;
+  repeated string server_names = 7;
+  string error = 8;
+}
+
+// ---------------------------------------------------------------------------
+// ListSecuritySchemes
+// ---------------------------------------------------------------------------
+
+// One declared security scheme (components.securitySchemes).
+message SecuritySchemeInfo {
+  string name = 1;
+  // "userPassword", "apiKey", "X509", "symmetricEncryption",
+  // "asymmetricEncryption", "httpApiKey", "http", "oauth2",
+  // "openIdConnect", "plain", "scramSha256", "scramSha512", or "gssapi".
+  string type = 2;
+  // For type "http": the auth-scheme token, e.g. "bearer", "basic".
+  string scheme = 3;
+  string bearer_format = 4;
+  // For type "apiKey"/"httpApiKey": where the key is carried
+  // ("user"/"password" for apiKey; "query"/"header"/"cookie" for httpApiKey).
+  string api_key_in = 5;
+  // For type "httpApiKey": the header/query/cookie parameter name.
+  string api_key_name = 6;
+  // For type "oauth2": the flows object, serialized as JSON.
+  string oauth_flows_json = 7;
+  string open_id_connect_url = 8;
+  string description = 9;
+}
+
+message ListSecuritySchemesOutput {
+  repeated SecuritySchemeInfo schemes = 1;
+  string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// ExtractMessageSchemas
+// ---------------------------------------------------------------------------
+
+// One message's payload schema reference: the message name, whether its
+// payload is a $ref (vs. an inline schema), the $ref target if so, and the
+// schema actually resolved to (following one internal $ref hop; never a
+// remote/external ref, which is reported unresolved instead).
+message MessageSchemaRef {
+  string message_name = 1;
+  bool payload_is_ref = 2;
+  // The raw $ref string, empty if payload_is_ref is false.
+  string payload_ref = 3;
+  // True if payload_ref pointed outside the document (a remote URL/file
+  // path) and was therefore left unresolved rather than fetched.
+  bool ref_is_external = 4;
+  // The resolved schema, serialized as JSON. Equals the inline payload
+  // when payload_is_ref is false; the dereferenced target's JSON when
+  // payload_is_ref is true and internal; "{}" when external/unresolved.
+  string resolved_schema_json = 5;
+}
+
+message ExtractMessageSchemasOutput {
+  repeated MessageSchemaRef schemas = 1;
+  string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// ExtractServerBindings / ExtractOperationBindings / ExtractMessageBindings
+// ---------------------------------------------------------------------------
+
+// One protocol-specific binding block found on a server, operation, or
+// message. Binding object shapes are protocol-defined (kafka bindings
+// look nothing like mqtt bindings) and open-ended, so the binding's own
+// body is reported as opaque JSON rather than modeled field-by-field.
+message BindingEntry {
+  // The server name / operation id / message name this binding applies to.
+  string scope_name = 1;
+  // The protocol key under `bindings:` (e.g. "kafka", "mqtt", "amqp", "ws").
+  string protocol = 2;
+  // That protocol's binding object, serialized as JSON.
+  string bindings_json = 3;
+}
+
+message ExtractServerBindingsOutput {
+  repeated BindingEntry bindings = 1;
+  string error = 2;
+}
+
+message ExtractOperationBindingsOutput {
+  repeated BindingEntry bindings = 1;
+  string error = 2;
+}
+
+message ExtractMessageBindingsOutput {
+  repeated BindingEntry bindings = 1;
+  string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// SummarizeDocument
+// ---------------------------------------------------------------------------
+
+// Whole-document counts — the cheapest possible "what's in here" check.
+message SummarizeDocumentOutput {
+  int32 major_version = 1;
+  string version_string = 2;
+  int32 server_count = 3;
+  int32 channel_count = 4;
+  // Total operation count: for 2.x, the sum of every channel's
+  // publish/subscribe operations; for 3.x, the size of the top-level
+  // operations map.
+  int32 operation_count = 5;
+  int32 message_count = 6;
+  int32 schema_count = 7;
+  int32 security_scheme_count = 8;
+  string error = 9;
+}
+
+// ---------------------------------------------------------------------------
+// ExtractRefs
+// ---------------------------------------------------------------------------
+
+// Result of extracting every `$ref` string found anywhere in the document.
+// This is a report only — no $ref, internal or external, is ever fetched
+// or resolved here (several other nodes resolve INTERNAL refs for their
+// own output fields; this node exists purely to inventory ref usage).
+message ExtractRefsOutput {
+  // Every distinct $ref target string found, in first-seen document order.
+  repeated string refs = 1;
+  // The subset that are external (do not start with "#/" — a remote URL or
+  // filesystem path) as opposed to an internal same-document JSON pointer.
+  repeated string external_refs = 2;
+  string error = 3;
+}
