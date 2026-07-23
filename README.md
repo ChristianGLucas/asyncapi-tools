@@ -3,7 +3,7 @@
 Deterministic, offline parsing and structural inspection of
 [AsyncAPI](https://www.asyncapi.com/) documents — the event-driven-API
 specification for Kafka/MQTT/AMQP/WebSocket/etc. APIs, the async/messaging
-counterpart to OpenAPI — built for the [Axiom](https://axiom.co) marketplace,
+counterpart to OpenAPI — built for the [Axiom](https://axiomide.com) marketplace,
 handle `christiangeorgelucas`.
 
 This completes the API-schema family alongside
