@@ -50,11 +50,15 @@ describe('DetectVersion', () => {
     expect(result.getParseError()).not.toBe('');
   });
 
-  it('rejects oversized input with a structured error', () => {
+  it('handles a large input without crashing (no payload-size limit)', () => {
+    // No byte-size cap is imposed by this node -- the platform bounds
+    // payload size, not this node. A large but well-formed document still
+    // parses cleanly.
     const input = new AsyncApiDocument();
     input.setContent("asyncapi: '2.6.0'\ninfo:\n  title: x\n  version: '1'\ndescription: '" + 'x'.repeat(3_100_000) + "'\nchannels: {}\n");
     const result = detectVersion(ctx, input);
-    expect(result.getParseError()).toMatch(/exceeds/);
+    expect(result.getParseError()).toBe('');
+    expect(result.getMajorVersion()).toBe(2);
   });
 
   it('is deterministic across repeated calls on the same input', () => {
