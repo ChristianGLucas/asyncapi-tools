@@ -5,15 +5,16 @@
 //
 // The parse layer is entirely owned by js-yaml (js-yaml.github.io) — nothing
 // here reimplements YAML/JSON parsing (JSON is a syntactic subset of YAML,
-// so a single yaml.load handles both). What lives here is: (a) an
-// input-size bound enforced BEFORE js-yaml ever sees the input, (b) a
-// single-document safe parse, (c) bounded internal-only $ref resolution
-// (never fetches a remote URL or filesystem path), and (d) the AsyncAPI
-// 2.x/3.x document-schema knowledge (which field, at which path, means
-// "channel", "operation", "message", "binding", etc., and how those shapes
-// differ between the two spec generations) — that knowledge is this
-// package's actual value-add, not something any generic YAML library
-// provides.
+// so a single yaml.load handles both). What lives here is: (a) a
+// single-document safe parse (with a `maxDepth` bound purely to keep the
+// recursive-descent composer within the JS call stack — see MAX_YAML_DEPTH
+// below), (b) bounded internal-only $ref resolution (never fetches a remote
+// URL or filesystem path), and (c) the AsyncAPI 2.x/3.x document-schema
+// knowledge (which field, at which path, means "channel", "operation",
+// "message", "binding", etc., and how those shapes differ between the two
+// spec generations) — that knowledge is this package's actual value-add,
+// not something any generic YAML library provides. Payload size and
+// resource limits are the platform's responsibility, not this node's.
 //
 // SAFETY: js-yaml v5's `load()` uses CORE_SCHEMA by default, which resolves
 // only plain YAML scalars/sequences/mappings (strings, numbers, bools,
@@ -22,45 +23,24 @@
 // code. That capability does not exist anywhere in js-yaml's codebase (it
 // was fully removed, not merely opt-in, since v4) unless a caller
 // explicitly installs the separate `js-yaml-js-types` package, which this
-// package does not depend on. We additionally pass explicit `maxDepth` and
-// `maxAliases` bounds on every parse call as defense-in-depth against
-// deeply-nested or alias-amplified input, on top of this module's own
-// byte-size ceiling.
+// package does not depend on.
 
 import * as yaml from 'js-yaml';
 
-/** Ceiling for a whole document's raw text. 3 MB — comfortably under the
- * ~4 MiB Axiom gRPC transport cap even after some of the input is echoed
- * back in output fields (e.g. a resolved schema), and far beyond any real
- * AsyncAPI document. */
-export const MAX_DOC_BYTES = 3_000_000;
-
 /** js-yaml's own collection-nesting-depth bound (does not count aliases).
- * Real AsyncAPI documents rarely nest more than ~15 levels (schema-within-
- * schema-within-components); 100 is generous headroom while still bounding
- * pathological input. */
+ * This exists to keep the recursive-descent YAML composer within the JS
+ * call stack (unbounded nesting is a genuine stack-overflow risk, not a
+ * memory/DoS concern) — kept for that reason even though payload-size and
+ * resource guards are otherwise the platform's job, not this node's. Real
+ * AsyncAPI documents rarely nest more than ~15 levels (schema-within-
+ * schema-within-components); 100 is generous headroom. */
 export const MAX_YAML_DEPTH = 100;
-
-/** js-yaml's own per-document alias-node ceiling — bounds "billion laughs"-
- * style alias amplification. Real AsyncAPI documents essentially never use
- * YAML anchors/aliases; 200 is generous headroom for the rare legitimate
- * use while bounding pathological expansion. */
-export const MAX_YAML_ALIASES = 200;
 
 /** Bound on internal $ref resolution hops, so a $ref chain (or an
  * undetected cycle) can never recurse unboundedly. Real documents resolve
  * in 1-2 hops (e.g. operation.messages[i] -> channel.messages.key ->
  * components.messages.Name); 10 is generous headroom. */
 export const MAX_REF_HOPS = 10;
-
-export class BoundsError extends Error {}
-
-/** Rejects oversized input (by UTF-8 byte length, not JS string length). */
-export function checkBytes(value: string, field: string, max: number): void {
-  if (Buffer.byteLength(value, 'utf8') > max) {
-    throw new BoundsError(`${field} exceeds ${max} bytes`);
-  }
-}
 
 /** Turns a caught value into a stable error message. */
 export function errorMessage(e: unknown, context: string): string {
@@ -80,18 +60,14 @@ export interface ParsedDoc {
   parseError: string | null;
 }
 
-/** Bounds + safely parses an AsyncAPI document's raw text (JSON or YAML —
- * JSON parses cleanly through the same YAML loader since it is a syntactic
- * subset). Never throws — an oversized input (checked BEFORE the YAML
- * loader ever sees it) is reported through parseError exactly like any
- * other parse problem, so every calling node gets a structured error
- * instead of having to separately catch BoundsError itself. */
+/** Safely parses an AsyncAPI document's raw text (JSON or YAML — JSON
+ * parses cleanly through the same YAML loader since it is a syntactic
+ * subset). Never throws — any parse problem (including pathologically deep
+ * nesting hitting MAX_YAML_DEPTH) is reported through parseError instead. */
 export function parseDocument(text: string, field = 'content'): ParsedDoc {
   try {
-    checkBytes(text, field, MAX_DOC_BYTES);
     const data = yaml.load(text, {
       maxDepth: MAX_YAML_DEPTH,
-      maxAliases: MAX_YAML_ALIASES,
     });
     return { data, parseError: null };
   } catch (e) {
